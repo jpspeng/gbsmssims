@@ -668,7 +668,7 @@ run_single_sim <- function(seed = NA,
 
 
 ###############################################################################
-# SOME SAMPLE CODE TO RUN
+# SOME SAMPLE CODE TO TRY
 ###############################################################################
 
 # create simulated datasets 
