@@ -70,10 +70,19 @@ ms_sim_data_epi <- function(seed = 100,
   
   S_measured <- ifelse(Y == 1, 1, NA)
   S_measured[is.na(S_measured)] <- permute(c(rep(1, sum(Y == 1) * 5),
-                                             rep(0, sum(is.na(S_measured)) - sum(Y == 1) * 5)))
+                                             rep(0, sum(is.na(S_measured)) - 
+                                                   sum(Y == 1) * 5)))
   
   data.frame(
-    S = S, S_measured = S_measured, X1 = X1, X2 = X2, X3 = X3, Y = Y, A = A, Z = Z, Y_prob = probs
+    S = S, 
+    S_measured = S_measured, 
+    X1 = X1, 
+    X2 = X2, 
+    X3 = X3, 
+    Y = Y, 
+    A = A, 
+    Z = Z, 
+    Y_prob = probs
   )
 }
 
@@ -83,9 +92,12 @@ ms_sim_data_epi <- function(seed = 100,
 #' @param seed Random seed 
 #' @param n_obs Number of observations in the Phase 3 (Z = 0) dataset
 #' @param num_sampled Number sampled for S in each arm 
-#' @param S_A0_mean_var Vector of 2 values to represent the mean and SD of S for Z=0, A=0
-#' @param S_A1_mean_var Vector of 2 values to represent the mean and SD of S for Z=0, A=1
-#' @param g0_A0_betas Vector of 5 beta values used to generate P(Y=1|A=0) probabilities
+#' @param S_A0_mean_var Vector of 2 values to represent the mean and SD of S for
+#' Z=0, A=0
+#' @param S_A1_mean_var Vector of 2 values to represent the mean and SD of S for 
+#' Z=0, A=1
+#' @param g0_A0_betas Vector of 5 beta values used to generate P(Y=1|A=0) 
+#' probabilities
 #' @param g0_A1_shift True u_CT bias in data generation 
 #'
 #' @return Dataframe with simulated Phase 3 (Z = 0) dataset
@@ -131,7 +143,14 @@ ms_sim_data_phase3 <- function(seed = 100,
   Y <- rbinom(n = n_obs, size = 1, prob = probs)
   
   data.frame(
-    S = S, X1 = X1, X2 = X2, X3 = X3, Y = Y, A = A, Z = Z, S_measured = S_measured
+    S = S, 
+    X1 = X1, 
+    X2 = X2, 
+    X3 = X3, 
+    Y = Y, 
+    A = A, 
+    Z = Z, 
+    S_measured = S_measured
   )
 }
 
@@ -234,10 +253,14 @@ estimate_plug_in <- function(df_obs, df_p3, ct_bias = 0, uc_bias = 0,
   
   if (fit_sampling_probs){
     # estimate sampling probability from Phase 3 dataset 
-    pi_mod_est <- get_sampling_mod(df_p3, formula_str = "S_measured ~ X1 + X2 + X3 + Y")
+    pi_mod_est <- get_sampling_mod(df_p3, 
+                                   formula_str = "S_measured ~ X1 + X2 + X3 + Y")
     
     # add weight columns (inverse of sampling probability)
-    df_p3$fitted_probs <- predict(pi_mod_est, newdata = df_p3, type = "response")
+    df_p3$fitted_probs <- predict(pi_mod_est, 
+                                  newdata = df_p3, 
+                                  type = "response")
+    
     df_p3$weights <- 1 / df_p3$fitted_probs 
   }
   else{
@@ -338,7 +361,7 @@ bootstrap_estimator <- function(df_obs, df_p3, boots = 500, ct_bias = 0, old = F
 }
 
 
-#' Helper function for sandwich variance  
+#' Helper function 1 for sandwich variance  
 #'
 #' @param X1 Vector of X1's
 #' @param X2 Vector of X2's
@@ -499,15 +522,17 @@ sb_estfun <- function(data, sampling_prob_Z1_Y0, sampling_prob_Z0, ct_bias = 0){
         sampling_probs,
       
       # estimating equations for Y(0), Y(1), VE
-      (1 - Z) * (pi2(X1, X2, X3, theta[6], theta[7], theta[8], theta[9]) - theta[14]),
+      (1 - Z) * (pi2(X1, X2, X3, theta[6], theta[7], theta[8], theta[9]) - 
+                   theta[14]),
 
-      (1 - Z) * (pi2(X1, X2, X3, theta[10], theta[11], theta[12], theta[13]) + ct_bias - theta[15])
+      (1 - Z) * (pi2(X1, X2, X3, theta[10], theta[11], theta[12], theta[13]) + 
+                   ct_bias - theta[15])
     )
   }
 }
 
 
-#' Get true sampling probabilities 
+#' Helper function to get true sampling probabilities 
 #'
 #' @param df_obs Dataframe for observational study
 #' @param df_p3 Dataframe for phase 3 study
@@ -543,7 +568,7 @@ sandwich_estimator <- function(df_obs, df_p3, ct_bias = 0){
   
   df_combined <- rbind.fill(
     df_obs %>% mutate(Z = 1) %>% filter(S_measured == 1), 
-    df_p3 %>% mutate(Z = 0)
+    df_p3 %>% mutate(Z = 0) %>% filter(S_measured == 1)
   ) 
   
   sampling_probs <- get_true_sampling_probs(df_obs, df_p3)
@@ -554,9 +579,10 @@ sandwich_estimator <- function(df_obs, df_p3, ct_bias = 0){
   
   results <- m_estimate(
     estFUN = sb_estfun, 
-    data   = df_combined, outer_args = list(ct_bias = ct_bias, 
-                                            sampling_prob_Z1_Y0 = sampling_prob_Z1_Y0, 
-                                            sampling_prob_Z0 = sampling_prob_Z0),
+    data   = df_combined, 
+    outer_args = list(ct_bias = ct_bias, 
+                      sampling_prob_Z1_Y0 = sampling_prob_Z1_Y0, 
+                      sampling_prob_Z0 = sampling_prob_Z0),
     root_control = setup_root_control(start = c(rep(0,13), 0.1, 0.1)), 
     deriv_control = setup_deriv_control(method = "simple")
   )
@@ -592,6 +618,8 @@ sandwich_estimator <- function(df_obs, df_p3, ct_bias = 0){
 #' @param seed Random seed
 #' @param S_A1_mean_var Vector of 2 values for representing the mean and SD for S 
 #' in the A = 1 arm 
+#' @param S_A0_mean_var Vector of 2 values for representing the mean and SD for S 
+#' in the A = 1 arm 
 #' @param n_obs_obs Number of observations in the observational study
 #' @param n_obs Number of observations in the phase 3 study
 #' @param num_sampled Number sampled for S in the phase 3 study
@@ -600,9 +628,11 @@ sandwich_estimator <- function(df_obs, df_p3, ct_bias = 0){
 #' @param true_ct_bias True CT bias in data generation
 #' @param est_ct_bias CT bias used for estimation
 #'
-#' @return
+#' @return List of estimates and standard errors for E[Y(0)|Z=0], E[Y(1)|Z=0], 
+#' and VE from randomly generated datasets
 run_single_sim <- function(seed = NA,
                            g0_betas = c(-17.1, -8.2, 0.69, -0.03, 0),
+                           S_A0_mean_var = c(-1.45, 0.15), 
                            S_A1_mean_var = c(-1.45, 0.15),
                            n_obs_obs = 39000,
                            n_obs_p3 = 6200, 
@@ -614,8 +644,10 @@ run_single_sim <- function(seed = NA,
   
   df_obs <- ms_sim_data_epi(seed = seed, 
                             g0_betas = g0_betas,
+                            S_A0_mean_var = S_A0_mean_var, 
                             n_obs = n_obs_obs)
   df_p3 <- ms_sim_data_phase3(seed = seed,
+                              S_A0_mean_var = S_A0_mean_var, 
                               S_A1_mean_var = S_A1_mean_var, 
                               n_obs = n_obs_p3,
                               num_sampled = num_sampled,
@@ -650,10 +682,12 @@ run_single_sim <- function(seed = NA,
       seed_new <- seed + 1000000
       
       print(seed_new)
-      df_obs <- ms_sim_data_epi(seed = seed_new, 
+      df_obs <- ms_sim_data_epi(seed = seed, 
                                 g0_betas = g0_betas,
+                                S_A0_mean_var = S_A0_mean_var, 
                                 n_obs = n_obs_obs)
-      df_p3 <- ms_sim_data_phase3(seed = seed_new,
+      df_p3 <- ms_sim_data_phase3(seed = seed,
+                                  S_A0_mean_var = S_A0_mean_var, 
                                   S_A1_mean_var = S_A1_mean_var, 
                                   n_obs = n_obs_p3,
                                   num_sampled = num_sampled,
@@ -673,6 +707,7 @@ run_single_sim <- function(seed = NA,
 
 # create simulated datasets 
 df_obs <- ms_sim_data_epi(seed = 2)
+df_p3 <- ms_sim_data_phase3(seed = 2)
 
 # estimate plug-in 
 estimate_plug_in(df_obs, df_p3)
@@ -683,5 +718,14 @@ bootstrap_estimator(df_obs, df_p3, boots = 100)
 # sandwich estimator
 sandwich_estimator(df_obs, df_p3)
 
-# runs a full simulation 
-run_single_sim(run_type = "both")
+# runs a full simulation for true VE = 0 case
+run_single_sim(seed = 1, 
+               S_A1_mean_var = c(-1.45, 0.15),
+               run_type = "both")
+
+# runs a full simulation for true VE = 0.5 case
+run_single_sim(seed = 1, 
+               S_A1_mean_var = c(-1.29, 0.2),
+               run_type = "both")
+
+
