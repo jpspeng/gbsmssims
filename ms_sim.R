@@ -6,6 +6,12 @@ library(rootSolve)
 library(geex)
 library(msm)
 library(haldensify)
+library(gam)
+library(nnls)
+library(ROCR)
+library(cvAUC)
+library(SuperLearner)
+library(parallel)
 
 
 ###############################################################################
@@ -14,27 +20,33 @@ library(haldensify)
 
 #' Generate Y probabilities from X1, X2, X3, S, using logistic function
 #'
-#' P(Y = 1|X1, X2, X3, S) = logistic(beta0 + beta1*S + beta2*X1 + beta3*X2 + 
-#' beta4*X3)
+#' P(Y = 1|X1, X2, X3, S) = scale * logistic(beta0 + beta1*S + beta2*S^2 + beta3*S^3 +
+#' beta4*X1 + beta5*X2 + beta6*X3)
 #'
 #' @param X1 Vector of X1's
 #' @param X2 Vector of X2's
 #' @param X3 Vector of X3's
 #' @param S Vector of S's
-#' @param betas Vector of 5 beta values  
+#' @param betas Vector of 7 beta values 
+#' @param scale Scaling factor for the Y probabilities  
 #'
 #' @return Vector of Y probabilities
 gen_Y_probs <- function(X1, X2, X3, S, 
-                        betas = c(-17.1, -8.2, 0.69, -0.03, 0)){
+                        betas = c(-5, -6, 6, 1, 0.69, -0.03, 0), 
+                        scale = 1){
   
   beta_0 <- betas[1]
   beta_1 <- betas[2]
   beta_2 <- betas[3]
   beta_3 <- betas[4]
   beta_4 <- betas[5]
+  beta_5 <- betas[6]
+  beta_6 <- betas[7]
   
-  plogis((S * beta_1) + (X1 * beta_2) + (X2 * beta_3) + (X3 * beta_4) + beta_0)
+  scale * plogis((S * beta_1) + ((S^2) * beta_2) + ((S^3) * beta_3) + 
+                   (X1 * beta_4) + (X2 * beta_5) + (X3 * beta_6) + beta_0)
 }
+
 
 
 #' Generate observational Z = 1 dataset 
@@ -43,13 +55,15 @@ gen_Y_probs <- function(X1, X2, X3, S,
 #' @param n_obs Number of observations in the observational (Z = 1) dataset 
 #' @param S_A0_mean_var Vector of 2 values to represent the mean and SD of S for 
 #' Z=1, A=0
-#' @param g0_betas Vector of 5 beta values used to generate P(Y=1) probabilities
+#' @param g0_betas Vector of 7 beta values used to generate P(Y=1) probabilities
+#' @param scale Scaling factor for the generated Y probabilities  
 #'
 #' @return Dataframe with simulated observational (Z = 1) dataset 
 ms_sim_data_epi <- function(seed = 100, 
                             n_obs = 39000, 
                             S_A0_mean_var = c(-1.45, 0.15),
-                            g0_betas = c(-17.1, -8.2, 0.69, -0.03, 0)){
+                            g0_betas = c(-17.1, -8.2, 0, 0, 0.69, -0.03, 0), 
+                            scale = 1){
   
   if (!is.na(seed)){
     set.seed(seed)
@@ -64,14 +78,13 @@ ms_sim_data_epi <- function(seed = 100,
   
   S <- rnorm(n_obs, mean =  S_A0_mean_var[1], sd = S_A0_mean_var[2])
   
-  probs <- gen_Y_probs(X1, X2, X3, S, g0_betas)
+  probs <- gen_Y_probs(X1, X2, X3, S, g0_betas, scale)
   
   Y <- rbinom(n = n_obs, size = 1, prob = probs)
   
   S_measured <- ifelse(Y == 1, 1, NA)
   S_measured[is.na(S_measured)] <- permute(c(rep(1, sum(Y == 1) * 5),
-                                             rep(0, sum(is.na(S_measured)) - 
-                                                   sum(Y == 1) * 5)))
+                                             rep(0, sum(is.na(S_measured)) - sum(Y == 1) * 5)))
   
   data.frame(
     S = S, 
@@ -96,9 +109,10 @@ ms_sim_data_epi <- function(seed = 100,
 #' Z=0, A=0
 #' @param S_A1_mean_var Vector of 2 values to represent the mean and SD of S for 
 #' Z=0, A=1
-#' @param g0_A0_betas Vector of 5 beta values used to generate P(Y=1|A=0) 
+#' @param g0_A0_betas Vector of 7 beta values used to generate P(Y=1|A=0) 
 #' probabilities
 #' @param g0_A1_shift True u_CT bias in data generation 
+#' @param scale Scaling factor for the generated Y probabilities
 #'
 #' @return Dataframe with simulated Phase 3 (Z = 0) dataset
 ms_sim_data_phase3 <- function(seed = 100, 
@@ -106,8 +120,9 @@ ms_sim_data_phase3 <- function(seed = 100,
                                num_sampled = 250,
                                S_A0_mean_var = c(-1.45, 0.15),
                                S_A1_mean_var =  c(-1.296, 0.2), 
-                               g0_A0_betas = c(-17.1, -8.2, 0.69, -0.03, 0), 
-                               g0_A1_shift = 0){
+                               g0_A0_betas = c(-17.1, -8.2, 0, 0, 0.69, -0.03, 0), 
+                               g0_A1_shift = 0, 
+                               scale = 1){
   if (!is.na(seed)){
     set.seed(seed)
   }
@@ -126,13 +141,15 @@ ms_sim_data_phase3 <- function(seed = 100,
                           X2[1:(n_obs/2)], 
                           X3[1:(n_obs/2)], 
                           S_0, 
-                          g0_A0_betas)
+                          g0_A0_betas, 
+                          scale)
   
   probs_A1 <- gen_Y_probs(X1[((n_obs/2)+1):n_obs], 
                           X2[((n_obs/2)+1):n_obs], 
                           X3[((n_obs/2)+1):n_obs], 
                           S_1, 
-                          g0_A0_betas) + g0_A1_shift
+                          g0_A0_betas, 
+                          scale) + g0_A1_shift
   
   S <- c(S_0, S_1)
   probs <- c(probs_A0, probs_A1)
@@ -175,11 +192,13 @@ get_sampling_mod <- function(df, formula_str = "S_measured ~ X1 + X2 + X3 + Y"){
 #' Estimate g0 function from observational data 
 #'
 #' @param df Dataframe 
+#' @param flexible T if we want to fit g0 using SuperLearner, F if we want
+#' to use logistic regression
 #' @param fit_sampling_probs T if we want to fit sampling probabilities, F if 
 #' we want to use the true sampling probabilities
 #'
 #' @return Linear regression glm model object for g0 function
-estimate_g0_from_obs <- function(df, fit_sampling_probs = F){
+estimate_g0_from_obs <- function(df, flexible = F, fit_sampling_probs = F){
   
   if (fit_sampling_probs){
     sampling_mod <- get_sampling_mod(df)
@@ -194,40 +213,190 @@ estimate_g0_from_obs <- function(df, fit_sampling_probs = F){
   
   df_nonmissing <- df %>% filter(S_measured == 1)
   
-  g0_mod <- glm(Y ~ X1 + X2 + X3 + S,
-                data = df_nonmissing,
-                family = "binomial",
-                weights = df_nonmissing$weights)
+  if (flexible){
+    g0_mod <- SuperLearner(Y = df_nonmissing$Y, 
+                           X = df_nonmissing %>% select(X1, X2, X3, S), 
+                           family = binomial(),
+                           SL.library = c("SL.mean", "SL.glm", "SL.gam"), 
+                           obsWeights = df_nonmissing$weights)
+  }
+  else{
+    g0_mod <- glm(Y ~ X1 + X2 + X3 + S,
+                  data = df_nonmissing,
+                  family = "binomial",
+                  weights = df_nonmissing$weights)
+  }
   g0_mod
 }
-
 
 #' Function to estimate the outer expectation
 #'
 #' @param g0_mod glm model object 
 #' @param df_p3 Phase 3 dataframe 
 #' @param formula_str Formula to use in glm  
+#' @param flexible T if we want to fit outer expectation using SuperLearner, F 
+#' if we want to use linear regression
 #'
 #' @return A list of 2 glm model objects, (1) for E_hat_A0 and (2) for E_hat_A1
-estimate_E_hat <- function(g0_mod, df_p3, formula_str = "Y_pred ~ X1 + X2 + X3"){
+estimate_E_hat <- function(g0_mod, df_p3, formula_str = "Y_pred ~ X1 + X2 + X3", 
+                           flexible = F){
   
-  # create predicted Y column 
-  df_p3$Y_pred <- predict(g0_mod, df_p3, type = "response")
+  if (flexible){
+    df_p3$Y_pred <- predict(g0_mod, df_p3, type = "response")$pred[,1]
+  }
+  else{
+    df_p3$Y_pred <- predict(g0_mod, df_p3, type = "response")
+  }
   
   df_treated <- df_p3 %>% filter(A == 1 & S_measured == 1)
   df_placebo <- df_p3 %>% filter(A == 0 & S_measured == 1)
   
-  E_hat_A0 <- glm(as.formula(formula_str),
-                  data = df_placebo, 
-                  weights = df_placebo$weights)
-  
-  E_hat_A1 <- glm(as.formula(formula_str),
-                  data = df_treated, 
-                  weights = df_treated$weights)
+  if (flexible){
+    E_hat_A0 <- SuperLearner(Y = df_placebo$Y_pred, 
+                             X = df_placebo %>% select(X1, X2, X3), 
+                             family = gaussian(),
+                             SL.library = c("SL.mean", "SL.glm", "SL.gam"), 
+                             obsWeights = df_placebo$weights)
+    
+    E_hat_A1 <- SuperLearner(Y = df_treated$Y_pred, 
+                             X = df_treated %>% select(X1, X2, X3), 
+                             family = gaussian(),
+                             SL.library = c("SL.mean", "SL.glm", "SL.gam"), 
+                             obsWeights = df_treated$weights)
+  }
+  else{
+    E_hat_A0 <- glm(as.formula(formula_str),
+                    data = df_placebo, 
+                    weights = df_placebo$weights)
+    
+    E_hat_A1 <- glm(as.formula(formula_str),
+                    data = df_treated, 
+                    weights = df_treated$weights)
+  }
   
   list(
     E_hat_A0 = E_hat_A0, 
     E_hat_A1 = E_hat_A1
+  )
+}
+
+
+#' Estimate P(Z=0)
+#'
+#' @param df_obs Dataframe for observational study
+#' @param df_p3 Dataframe for phase 3 study
+#'
+#' @return Estimate of P(Z=0)
+estimate_P_Z <- function(df_obs, df_p3){
+  nrow(df_p3) / (nrow(df_obs) + nrow(df_p3))
+}
+
+
+#' Estimate P(A=a | X, Z = 0)
+#'
+#' @param df_obs Dataframe for observational study
+#' @param df_p3 Dataframe for phase 3 study
+#'
+#' @return Assumed probability of P(A = 1 | X, Z = 0) = 0.5
+estimate_P_A <- function(df_obs, df_p3){
+  0.5
+}
+
+
+#' Estimate P(S_measured = 1| Z, A, X)
+#'
+#' @param df_obs Dataframe for observational study
+#' @param df_p3 Dataframe for phase 3 study
+#'
+#' @return Estimate for P(S_measured = 1 | Z, A, X)
+estimate_P_S_measured_ZAX <- function(df_obs, df_p3){
+  
+  log_model_Z0 <- glm(S_measured ~ X1 + X2 + X3 + A, 
+                      data = df_p3, 
+                      family = binomial)
+  
+  log_model_Z1 <- glm(S_measured ~ X1 + X2 + X3, 
+                      data = df_obs, 
+                      family = binomial)
+  
+  list(
+    log_model_Z0 = log_model_Z0, 
+    log_model_Z1 = log_model_Z1
+  )
+  
+}
+
+
+#' Estimate P(Z = z, A = a | X, S)
+#'
+#' @param df_obs Dataframe for observational study
+#' @param df_p3 Dataframe for phase 3 study
+#' @param flexible T if we want to fit using SuperLearner, F if we want
+#' to use logistic regression
+#'
+#' @return Estimates for P(Z = z, A = a | X, S)
+estimate_P_Z_A_XS <- function(df_obs, df_p3, flexible = F){
+  
+  sampling_mod <- estimate_P_S_measured_ZAX(df_obs, df_p3)
+  
+  log_model_Z0 <- sampling_mod[["log_model_Z0"]]
+  log_model_Z1 <- sampling_mod[["log_model_Z1"]]
+  
+  df_obs$fitted_probs <- predict(log_model_Z1, df_obs, type = "response")
+  df_obs$weights <- 1 / df_obs$fitted_probs 
+  
+  df_p3$fitted_probs <- predict(log_model_Z0, df_p3, type = "response")
+  df_p3$weights <- 1 / df_p3$fitted_probs 
+  
+  df_combined <- df_obs %>% rbind.fill(df_p3)
+  
+  df_nonmissing <- df_combined %>% 
+    filter(S_measured == 1) %>%
+    mutate(Z0A1 = ifelse(Z == 0 & A == 1, 1, 0), 
+           Z0A0 = ifelse(Z == 0 & A == 0, 1, 0))
+  
+  
+  if (flexible){
+    log_model_Z0A1 <- SuperLearner(Y = df_nonmissing$Z0A1, 
+                                   X = df_nonmissing %>% select(X1, X2, X3, S), 
+                                   family = binomial(),
+                                   SL.library = c("SL.mean", "SL.glm", "SL.gam"), 
+                                   obsWeights = df_nonmissing$weights)
+    
+    log_model_Z0A0 <- SuperLearner(Y = df_nonmissing$Z0A0, 
+                                   X = df_nonmissing %>% select(X1, X2, X3, S), 
+                                   family = binomial(),
+                                   SL.library = c("SL.mean", "SL.glm", "SL.gam"), 
+                                   obsWeights = df_nonmissing$weights)
+    
+    log_model_Z1 <- SuperLearner(Y = df_nonmissing$Z, 
+                                 X = df_nonmissing %>% select(X1, X2, X3, S), 
+                                 family = binomial(),
+                                 SL.library = c("SL.mean", "SL.glm", "SL.gam"), 
+                                 obsWeights = df_nonmissing$weights)
+    
+  }
+  else{
+    log_model_Z0A1 <- glm(Z0A1 ~ S + X1 + X2 + X3, 
+                          data = df_nonmissing, 
+                          family = "binomial",
+                          weights = df_nonmissing$weights)
+    
+    log_model_Z0A0 <- glm(Z0A0 ~ S + X1 + X2 + X3, 
+                          data = df_nonmissing, 
+                          family = "binomial",
+                          weights = df_nonmissing$weights)
+    
+    log_model_Z1 <- glm(Z ~ S + X1 + X2 + X3, 
+                        data = df_nonmissing, 
+                        family = "binomial",
+                        weights = df_nonmissing$weights)
+  }
+  
+  list(
+    log_model_Z0A1 = log_model_Z0A1, 
+    log_model_Z0A0 = log_model_Z0A0,
+    log_model_Z1 = log_model_Z1
   )
 }
 
@@ -608,6 +777,172 @@ sandwich_estimator <- function(df_obs, df_p3, ct_bias = 0){
   )
 }
 
+###############################################################################
+# ONE-STEP ESTIMATOR  
+###############################################################################
+
+#' Function to run one-step estimator
+#'
+#' @param df_obs Dataframe for observational study
+#' @param df_p3 Dataframe for phase 3 study
+#' @param flexible T if we want to fit g0 using SuperLearner, F if we want
+#' to use logistic regression
+#' @param ct_bias CT bias used for estimation 
+#' @param uc_bias UC bias used for estimation 
+#'
+#' @return One-step estimator results
+one_step_estimator <- function(df_obs, df_p3, flexible = T, ct_bias = 0, 
+                               uc_bias = 0){
+  
+  # get true sampling probabilities 
+  sampling_probs <- get_true_sampling_probs(df_obs, df_p3)
+  
+  sampling_prob_Z1_Y0 <- sampling_probs[["sampling_prob_Z1_Y0"]]
+  sampling_prob_Z0 <- sampling_probs[["sampling_prob_Z0"]]
+  sampling_prob_Z1_Y1 <- sampling_probs[["sampling_prob_Z1_Y1"]]
+  
+  df_obs <- df_obs %>% mutate(sampling_prob = ifelse(Y == 1, sampling_prob_Z1_Y1, 
+                                                     sampling_prob_Z1_Y0))
+  
+  df_p3 <- df_p3 %>% mutate(sampling_prob = sampling_prob_Z0)
+  
+  df_p3$weights <- 1 / df_p3$sampling_prob
+  
+  # fit g0
+  g0_mod_est <- estimate_g0_from_obs(df_obs, flexible = flexible)
+  
+  # fit outer expectation E
+  E_hats <- estimate_E_hat(g0_mod_est, df_p3, flexible = flexible)
+  
+  # get E0 and E1 predictions 
+  if (flexible){
+    df_p3$g_pred <- predict(g0_mod_est, df_p3, type = "response")$pred[,1]
+    df_obs$g_pred <- predict(g0_mod_est, df_obs, type = "response")$pred[,1]
+    
+    df_p3$E0_pred <- predict(E_hats[["E_hat_A0"]], df_p3, type = "response")$pred[,1]
+    df_p3$E1_pred <- predict(E_hats[["E_hat_A1"]], df_p3,  type = "response")$pred[,1]
+  }
+  else{
+    df_p3$g_pred <- predict(g0_mod_est, df_p3, type = "response")
+    df_obs$g_pred <- predict(g0_mod_est, df_obs, type = "response")
+    
+    df_p3$E0_pred <- predict(E_hats[["E_hat_A0"]], df_p3, type = "response")
+    df_p3$E1_pred <- predict(E_hats[["E_hat_A1"]], df_p3,  type = "response")
+  }
+  
+  # estimate counterfactual E[Y(1)]: plug-in estimate
+  Y_counter_1 <- mean(df_p3$E1_pred) 
+  
+  # estimate counterfactual E[Y(0)]: plug-in estimate
+  Y_counter_0 <- mean(df_p3$E0_pred)
+  
+  # estimate P(Z = 0)
+  est_P_Z_0 <- estimate_P_Z(df_obs, df_p3)
+  
+  # estimate P(A = a | X, Z = 0)
+  est_P_A <- estimate_P_A(df_obs, df_p3)
+  
+  # estimate P(Z=z,A=a | X, S)
+  log_mod_P_ZA_XS <- estimate_P_Z_A_XS(df_obs, df_p3, flexible = flexible)
+  
+  # get P_Z0A1_preds 
+  if (flexible){
+    df_obs$P_Z0A1_pred <- predict(log_mod_P_ZA_XS[["log_model_Z0A1"]], 
+                                  df_obs,
+                                  type = "response")$pred[,1]
+    
+    df_obs$P_Z0A0_pred <- predict(log_mod_P_ZA_XS[["log_model_Z0A0"]],
+                                  df_obs, 
+                                  type = "response")$pred[,1]
+    
+    df_obs$P_Z1A0_pred <- predict(log_mod_P_ZA_XS[["log_model_Z1"]],
+                                  df_obs, 
+                                  type = "response")$pred[,1]
+  }
+  else{
+    df_obs$P_Z0A1_pred <- predict(log_mod_P_ZA_XS[["log_model_Z0A1"]], 
+                                  df_obs,
+                                  type = "response")
+    
+    df_obs$P_Z0A0_pred <- predict(log_mod_P_ZA_XS[["log_model_Z0A0"]],
+                                  df_obs, 
+                                  type = "response")
+    
+    df_obs$P_Z1A0_pred <- predict(log_mod_P_ZA_XS[["log_model_Z1"]],
+                                  df_obs, 
+                                  type = "response")
+  }
+  # get P_Z0A1_preds
+  df_obs <- df_obs %>% 
+    
+    mutate(
+      phi0 = (1 / est_P_Z_0) * (1 / est_P_A) * (P_Z0A0_pred / P_Z1A0_pred) * (Y - g_pred),
+      phi1 = (1 / est_P_Z_0) * (1 / est_P_A) * (P_Z0A1_pred / P_Z1A0_pred) * (Y - g_pred) 
+    )
+  
+  
+  df_p3 <- df_p3 %>% 
+    
+    mutate(
+      phi0 = ((1 / est_P_Z_0) * ((1-A) / (1 - est_P_A)) * (g_pred - E0_pred)) + 
+        ((1 / est_P_Z_0) * (E0_pred - Y_counter_0)),
+      phi1 =  ((1 / est_P_Z_0) * (A / est_P_A) * (g_pred - E1_pred)) + 
+        ((1 / est_P_Z_0) * (E1_pred - Y_counter_1))
+    )
+  
+  # calculate phi_0 and phi_1
+  df_obs_meas <- df_obs %>% filter(S_measured == 1)
+  df_p3_meas <- df_p3 %>% filter(S_measured == 1)
+  
+  E_phi0_obs_mod <- glm(phi0 ~ X1 + X2 + X3 + Y, data = df_obs_meas)
+  E_phi0_p3_mod <- glm(phi0 ~ X1 + X2 + X3 + A, data = df_p3_meas)
+  
+  E_phi1_obs_mod <- glm(phi1 ~ X1 + X2 + X3 + Y, data = df_obs_meas)
+  E_phi1_p3_mod <- glm(phi1 ~ X1 + X2 + X3 + A, data = df_p3_meas)
+  
+  df_obs$E_phi0 <- predict(E_phi0_obs_mod, df_obs,  type = "response")
+  df_obs$E_phi1 <- predict(E_phi1_obs_mod, df_obs,  type = "response")
+  
+  df_p3$E_phi0 <- predict(E_phi0_p3_mod, df_p3, type = "response")
+  df_p3$E_phi1 <- predict(E_phi1_p3_mod, df_p3,  type = "response")
+  
+  df_combined <- df_obs %>% rbind.fill(df_p3)
+  
+  df_combined <- df_combined %>% 
+    mutate(psi0 = (S_measured / sampling_prob) * phi0 +
+             (1 - (S_measured / sampling_prob)) * E_phi0, 
+           psi1 = (S_measured / sampling_prob) * phi1 +
+             (1 - (S_measured / sampling_prob)) * E_phi1)
+  
+  Y_0_os_estimate <- Y_counter_0 + mean(df_combined$psi0) - uc_bias
+  Y_1_os_estimate <- Y_counter_1 + mean(df_combined$psi1) + ct_bias - uc_bias
+  
+  Y_0_os_se <- sqrt(var(df_combined$psi0)) / sqrt(nrow(df_combined))
+  Y_1_os_se <- sqrt(var(df_combined$psi1)) / sqrt(nrow(df_combined))
+  
+  log_1_minus_VE_os_estimate = log(Y_1_os_estimate / Y_0_os_estimate)
+  
+  log_1_minus_VE_os_se <- deltamethod(
+    ~ log(x2 / x1), 
+    mean = c(Y_0_os_estimate, Y_1_os_estimate), 
+    cov = matrix(cov(df_combined[,c("psi0", "psi1")]) / nrow(df_combined), 
+                 nrow = 2)
+  ) 
+  
+  list(
+    Y_0_os_estimate = Y_0_os_estimate,
+    Y_1_os_estimate = Y_1_os_estimate,
+    
+    Y_0_os_se = Y_0_os_se,
+    Y_1_os_se = Y_1_os_se, 
+    log_1_minus_VE_os_estimate = log_1_minus_VE_os_estimate, 
+    log_1_minus_VE_os_se = log_1_minus_VE_os_se
+  )
+  
+  
+}
+
+
 
 ###############################################################################
 # RUN SINGLE SIMULATION   
@@ -616,23 +951,26 @@ sandwich_estimator <- function(df_obs, df_p3, ct_bias = 0){
 #' Function to run single simulation
 #'
 #' @param seed Random seed
+#' @param g0_betas Vector of 7 beta values used to generate P(Y=1) probabilities
 #' @param S_A1_mean_var Vector of 2 values for representing the mean and SD for S 
 #' in the A = 1 arm 
 #' @param S_A0_mean_var Vector of 2 values for representing the mean and SD for S 
 #' in the A = 1 arm 
 #' @param n_obs_obs Number of observations in the observational study
-#' @param n_obs Number of observations in the phase 3 study
+#' @param n_obs_p3 Number of observations in the phase 3 study
 #' @param num_sampled Number sampled for S in the phase 3 study
 #' @param boots Number of bootstrap runs 
-#' @param run_type "bs" for bootstrap, "sw" for sandwich, or "both" for both 
+#' @param run_type "bs" for bootstrap, "sw" for sandwich, "one-step" for one-step, 
+#' "all" for all 
 #' @param true_ct_bias True CT bias in data generation
 #' @param est_ct_bias CT bias used for estimation
+#' @param scale Scale factor when generating P(Y=1) probabilities 
 #'
 #' @return List of estimates and standard errors for E[Y(0)|Z=0], E[Y(1)|Z=0], 
 #' and VE from randomly generated datasets
 run_single_sim <- function(seed = NA,
-                           g0_betas = c(-17.1, -8.2, 0.69, -0.03, 0),
-                           S_A0_mean_var = c(-1.45, 0.15), 
+                           g0_betas = c(-17.1, -8.2, 0, 0, 0.69, -0.03, 0),
+                           S_A0_mean_var = c(-1.5, 0.3), 
                            S_A1_mean_var = c(-1.45, 0.15),
                            n_obs_obs = 39000,
                            n_obs_p3 = 6200, 
@@ -640,19 +978,23 @@ run_single_sim <- function(seed = NA,
                            boots = 500, 
                            run_type = "bs", 
                            true_ct_bias = 0, 
-                           est_ct_bias = 0){
+                           est_ct_bias = 0, 
+                           scale = 1){
   
   df_obs <- ms_sim_data_epi(seed = seed, 
                             g0_betas = g0_betas,
                             S_A0_mean_var = S_A0_mean_var, 
-                            n_obs = n_obs_obs)
+                            n_obs = n_obs_obs,
+                            scale = scale)
+  
   df_p3 <- ms_sim_data_phase3(seed = seed,
                               S_A0_mean_var = S_A0_mean_var, 
                               S_A1_mean_var = S_A1_mean_var, 
                               n_obs = n_obs_p3,
                               num_sampled = num_sampled,
                               g0_A1_shift = true_ct_bias, 
-                              g0_A0_betas = g0_betas)
+                              g0_A0_betas = g0_betas,
+                              scale = scale)
   
   run_estimator <- function(df_obs, df_p3){
     if (run_type == "bs"){
@@ -661,6 +1003,10 @@ run_single_sim <- function(seed = NA,
     else if  (run_type == "sandwich"){
       sandwich_estimator(df_obs, df_p3, ct_bias = est_ct_bias)
     }
+    else if (run_type == "one-step"){
+      one_step_estimator(df_obs, df_p3, flexible = T, 
+                         ct_bias = est_ct_bias)
+    }
     else{
       bs_res <- bootstrap_estimator(df_obs, df_p3, boots = boots, 
                                     ct_bias = est_ct_bias)
@@ -668,7 +1014,10 @@ run_single_sim <- function(seed = NA,
       sandwich_res <- sandwich_estimator(df_obs, df_p3, 
                                          ct_bias = est_ct_bias)
       
-      c(bs_res, sandwich_res)
+      one_step_res <- one_step_estimator(df_obs, df_p3, flexible = T, 
+                                         ct_bias = est_ct_bias)
+      
+      c(bs_res, sandwich_res, one_step_res)
     }
   }
   
@@ -682,23 +1031,27 @@ run_single_sim <- function(seed = NA,
       seed_new <- seed + 1000000
       
       print(seed_new)
-      df_obs <- ms_sim_data_epi(seed = seed, 
+      df_obs <- ms_sim_data_epi(seed = seed_new, 
                                 g0_betas = g0_betas,
                                 S_A0_mean_var = S_A0_mean_var, 
-                                n_obs = n_obs_obs)
-      df_p3 <- ms_sim_data_phase3(seed = seed,
+                                n_obs = n_obs_obs,
+                                scale = scale)
+      
+      df_p3 <- ms_sim_data_phase3(seed = seed_new,
                                   S_A0_mean_var = S_A0_mean_var, 
                                   S_A1_mean_var = S_A1_mean_var, 
                                   n_obs = n_obs_p3,
                                   num_sampled = num_sampled,
                                   g0_A1_shift = true_ct_bias, 
-                                  g0_A0_betas = g0_betas)
+                                  g0_A0_betas = g0_betas,
+                                  scale = scale)
       run_estimator(df_obs, df_p3)
     }
   )
   
   res
 }
+
 
 
 ###############################################################################
@@ -718,14 +1071,17 @@ bootstrap_estimator(df_obs, df_p3, boots = 100)
 # sandwich estimator
 sandwich_estimator(df_obs, df_p3)
 
+# one-step estimator 
+one_step_estimator(df_obs, df_p3)
+
 # runs a full simulation for true VE = 0 case
 run_single_sim(seed = 1, 
                S_A1_mean_var = c(-1.45, 0.15),
-               run_type = "both")
+               run_type = "all")
 
 # runs a full simulation for true VE = 0.5 case
 run_single_sim(seed = 1, 
                S_A1_mean_var = c(-1.29, 0.2),
-               run_type = "both")
+               run_type = "all")
 
 
