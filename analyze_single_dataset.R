@@ -492,7 +492,7 @@ estimate_ve_surrogate <- function(df_obs,
                                   ct_bias_values = c(0), 
                                   uc_bias_values = c(0),
                                   alpha = 0.05, 
-                                  success_criteria = c(NA, NA),
+                                  success_criterion = c(NA, NA),
                                   bootstrap_reps = 100){
   
   if (!all(df_obs[[treatment]] %in% c(0, 1))) {
@@ -620,29 +620,29 @@ estimate_ve_surrogate <- function(df_obs,
     
     if (ct_bias == 0 & uc_bias == 0 ) {
       
-      if (is.na(success_criteria[1]) & is.na(success_criteria[2])){
+      if (is.na(success_criterion[1]) & is.na(success_criterion[2])){
         cat("Tipping point analysis not performed - no success criteria specified.")
       }
-      else if (!is.na(success_criteria[1]) & temp_result_df$VE_lower < success_criteria[1]){
+      else if (!is.na(success_criterion[1]) & temp_result_df$VE_lower < success_criterion[1]){
         cat("Tipping point analysis not performed - success criteria not met with bias functions specified as 0.")
       }
-      else if (!is.na(success_criteria[2]) & temp_result_df$VE < success_criteria[2]){
+      else if (!is.na(success_criterion[2]) & temp_result_df$VE < success_criterion[2]){
         cat("Tipping point analysis not performed - success criteria not met with bias functions specified as 0.")
       }
       else{
         cat("\n-----------------------------\n")
         cat(" Tipping Point Analysis\n")
-        if (!is.na(success_criteria[1])){
-          cat(sprintf("Lower VE CI = %s Threshold\n", success_criteria[1]))
+        if (!is.na(success_criterion[1])){
+          cat(sprintf("Lower VE CI = %s Threshold\n", success_criterion[1]))
         }
-        if (!is.na(success_criteria[2])){
-          cat(sprintf("Point Estimate = %s Threshold\n", success_criteria[2]))
+        if (!is.na(success_criterion[2])){
+          cat(sprintf("Point Estimate = %s Threshold\n", success_criterion[2]))
         }
         
         tipping_points <- find_tipping_point_val(Y_0 = temp_result_df$Y_0, 
                                                  Y_1 = temp_result_df$Y_1, 
                                                  cov_mat = cov_mat, 
-                                                 tipping_point = success_criteria, 
+                                                 tipping_point = success_criterion, 
                                                  alpha = alpha)
         
         cat("-----------------------------\n")
